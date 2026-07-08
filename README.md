@@ -7,9 +7,8 @@
 A **vectorized** database engine solves this by representing the database as flat arrays of columns instead of rows:
 * You can think of this as having some pointers in a vector that point to the beginning of these **flat arrays**.
 * When we decide to query that array, the CPU loads the data in clean, contiguous lines.
-* Because the data is completely contiguous in memory, it takes the whole cache line at once and makes processing incredibly fast.
+* Because the data is completely contiguous in memory, it takes the whole cache line at once and makes processing faster (less cache misses).
 
----
 
 ## File Guide
 
@@ -47,8 +46,6 @@ A **vectorized** database engine solves this by representing the database as fla
 * **`benchmark.cpp`**
   The performance testing tool. It feeds 10 million rows into the engine to measure the exact speed of our optimized code against a traditional database loop.
 
----
-
 ## Explanation of the Benchmark Results
 
 When you run the benchmark file, it measures how long it takes the CPU to filter through 10 million rows of data. 
@@ -58,4 +55,4 @@ The benchmark compares two different coding methods:
 1. **The Naive Method:** Uses a standard if-statement, which forces the CPU to constantly guess whether a row passes the filter. This causes branch mispredictions and slows down the hardware.
 2. **The Optimized Method:** Uses a branchless design and a compiler hint. This setup allows the compiler to generate SIMD instructions. 
 
-**SIMD** stands for *Single Instruction, Multiple Data*. Instead of checking rows one by one, the CPU hardware is able to check multiple data slots at the exact same time. This is why the benchmark shows a clear performance speedup and processes billions of rows per second.
+**SIMD** stands for *Single Instruction, Multiple Data*. Instead of checking rows one by one, the CPU hardware is able to check multiple data slots at the exact same time. This is why the benchmark shows a clear performance speedup of 15%.
