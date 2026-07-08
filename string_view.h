@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+#include <vector>
 
 struct StringView {
   uint32_t length;
