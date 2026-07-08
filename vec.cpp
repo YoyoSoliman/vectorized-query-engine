@@ -1,61 +1,62 @@
-#include "operators.h"
+#include "hash_join_op.h"
+#include "operators_impl.h"
+#include "scheduler.h"
 #include <iostream>
 #include <memory>
+#include <mutex>
 
 int main() {
-  // 1. Build Side Table — containing intentional duplicates of key 150
-  ColumnarBatch build_table;
-  Vector build_col(TypeId::INT64);
-  build_table.columns.push_back(std::move(build_col));
+  MorselScheduler scheduler;
+  std::mutex stdout_mutex;
 
-  int64_t *raw_build_array =
-      static_cast<int64_t *>(build_table.columns[0].data);
-  raw_build_array[0] = 50;
-  raw_build_array[1] = 150; // first instance of 150
-  raw_build_array[2] = 30;
-  raw_build_array[3] = 150; // duplicate instance of 150!
-  build_table.size = 4;
+  std::cout << "--- GENERATING MULTI-THREADED MORSEL CHUNKS ---" << std::endl;
 
-  // 2. Probe Side Table — containing keys to look up
-  ColumnarBatch probe_table;
-  Vector probe_col(TypeId::INT64);
-  probe_table.columns.push_back(std::move(probe_col));
-
-  int64_t *raw_probe_array =
-      static_cast<int64_t *>(probe_table.columns[0].data);
-  raw_probe_array[0] = 30;  // matches row 2
-  raw_probe_array[1] = 99;  // no match
-  raw_probe_array[2] = 150; // matches row 1 AND row 3!
-  probe_table.size = 3;
-
-  std::cout << "--- ASSEMBLING MULTI-MATCH HASH JOIN TREE ---" << std::endl;
-
-  auto build_scan = std::make_unique<ScanOperator>(std::move(build_table));
-  auto probe_scan = std::make_unique<ScanOperator>(std::move(probe_table));
-
-  auto join_pipeline = std::make_unique<HashJoinOperator>(
-      std::move(build_scan), std::move(probe_scan), 0, 0);
-
-  ColumnarBatch output_joined_batch;
-  std::cout << "\n--- EXECUTING RELATIONAL JOIN PHASE ---" << std::endl;
-
-  if (join_pipeline->Next(output_joined_batch)) {
-    std::cout << "Join successful! Emitted " << output_joined_batch.size
-              << " matching rows:\n"
-              << std::endl;
-
-    int64_t *res_col0 =
-        static_cast<int64_t *>(output_joined_batch.columns[0].data);
-    int64_t *res_col1 =
-        static_cast<int64_t *>(output_joined_batch.columns[1].data);
-
-    for (size_t i = 0; i < output_joined_batch.size; i++) {
-      std::cout << "Row " << i << " -> [Build Key: " << res_col0[i]
-                << " | Probe Key: " << res_col1[i] << "]" << std::endl;
-    }
-  } else {
-    std::cout << "Join execution yielded 0 matching key sets." << std::endl;
+  // Morsel Chunks 1 & 2 mimic an upscale partitioned storage scan
+  {
+    ColumnarBatch chunk1;
+    chunk1.columns.push_back(Vector(TypeId::INT64));
+    chunk1.columns.push_back(Vector(TypeId::VARCHAR));
+    int64_t *ints = static_cast<int64_t *>(chunk1.columns[0].data);
+    ints[0] = 150;
+    ints[1] = 20;
+    ints[2] = 300;
+    chunk1.columns[1].AppendString(0, "morsel_1_pass_a");
+    chunk1.columns[1].AppendString(1, "morsel_1_drop");
+    chunk1.columns[1].AppendString(2, "morsel_1_pass_b");
+    chunk1.size = 3;
+    scheduler.AddMorsel(std::move(chunk1));
   }
+
+  {
+    ColumnarBatch chunk2;
+    chunk2.columns.push_back(Vector(TypeId::INT64));
+    chunk2.columns.push_back(Vector(TypeId::VARCHAR));
+    int64_t *ints = static_cast<int64_t *>(chunk2.columns[0].data);
+    ints[0] = 40;
+    ints[1] = 500;
+    ints[2] = 120;
+    chunk2.columns[1].AppendString(0, "morsel_2_drop");
+    chunk2.columns[1].AppendString(1, "morsel_2_pass_a");
+    chunk2.columns[1].AppendString(2, "morsel_2_pass_b");
+    chunk2.size = 3;
+    scheduler.AddMorsel(std::move(chunk2));
+  }
+
+  std::cout << "\n--- EXECUTING CONCURRENT MORSEL-DRIVEN PIPELINE ---"
+            << std::endl;
+
+  // Multi-threaded lambda processing execution branches in parallel
+  scheduler.ExecuteParallel([&stdout_mutex](ColumnarBatch &&morsel) {
+    auto scan = std::make_unique<ScanOperator>(std::move(morsel));
+    auto filter = std::make_unique<FilterOperator>(std::move(scan), 100);
+    auto pipeline = std::make_unique<AggregationOperator>(std::move(filter), 1);
+
+    ColumnarBatch result_batch;
+
+    // Isolate console access to keep output clean across threads
+    std::lock_guard<std::mutex> lock(stdout_mutex);
+    pipeline->Next(result_batch);
+  });
 
   return 0;
 }
